@@ -1,0 +1,168 @@
+package maker
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"text/template"
+	"time"
+	"unicode"
+)
+
+type migrationKind int
+
+const (
+	kindCreate migrationKind = iota
+	kindAddColumn
+	kindChangeColumn
+	kindDropColumn
+	kindDropTable
+	kindBlank
+)
+
+type meta struct {
+	Kind      migrationKind
+	ClassName string
+	Namespace string
+	Version   string
+	Table     string
+	Column    string
+}
+
+type langTemplates struct {
+	Create        string
+	DropTable     string
+	AddColumn     string
+	ChangeColumn  string
+	DropColumn    string
+	Blank         string
+	FileExt       string
+	NamespaceFunc func(datePrefix string) string
+}
+
+func Make(name, projectDir, sdk string) (string, error) {
+	now := time.Now()
+	timestamp := now.Format("20060102_150405")
+	datePrefix := now.Format("20060102")
+
+	lang, err := resolveLang(sdk)
+	if err != nil {
+		return "", err
+	}
+
+	m := parse(name)
+	m.ClassName = name
+	m.Version = timestamp
+	m.Namespace = lang.NamespaceFunc(datePrefix)
+
+	tmpl, err := chooseTemplate(m, lang)
+	if err != nil {
+		return "", err
+	}
+
+	filename := fmt.Sprintf("%s_%s%s", timestamp, name, lang.FileExt)
+	path := filepath.Join(projectDir, filename)
+
+	f, err := os.Create(path)
+	if err != nil {
+		return "", fmt.Errorf("create file: %w", err)
+	}
+	defer f.Close()
+
+	if err := tmpl.Execute(f, m); err != nil {
+		return "", fmt.Errorf("render template: %w", err)
+	}
+
+	return path, nil
+}
+
+func resolveLang(sdk string) (langTemplates, error) {
+	switch sdk {
+	case "csharp", "":
+		return csharpTemplates, nil
+	case "python":
+		return pythonTemplates, nil
+	default:
+		return langTemplates{}, fmt.Errorf("unknown sdk: %s (supported: csharp, python)", sdk)
+	}
+}
+
+func parse(name string) meta {
+	// Create{X}Table
+	if strings.HasPrefix(name, "Create") && strings.HasSuffix(name, "Table") {
+		table := name[len("Create") : len(name)-len("Table")]
+		return meta{Kind: kindCreate, Table: toSnake(table)}
+	}
+
+	// Drop{X}Table
+	if strings.HasPrefix(name, "Drop") && strings.HasSuffix(name, "Table") {
+		table := name[len("Drop") : len(name)-len("Table")]
+		return meta{Kind: kindDropTable, Table: toSnake(table)}
+	}
+
+	// Add{Column}To{Table}
+	if strings.HasPrefix(name, "Add") {
+		if col, table, ok := splitOn(name[len("Add"):], "To"); ok {
+			return meta{Kind: kindAddColumn, Column: toSnake(col), Table: toSnake(table)}
+		}
+	}
+
+	// Change{Column}In{Table}
+	if strings.HasPrefix(name, "Change") {
+		if col, table, ok := splitOn(name[len("Change"):], "In"); ok {
+			return meta{Kind: kindChangeColumn, Column: toSnake(col), Table: toSnake(table)}
+		}
+	}
+
+	// Drop{Column}From{Table}
+	if strings.HasPrefix(name, "Drop") {
+		if col, table, ok := splitOn(name[len("Drop"):], "From"); ok {
+			return meta{Kind: kindDropColumn, Column: toSnake(col), Table: toSnake(table)}
+		}
+	}
+
+	return meta{Kind: kindBlank}
+}
+
+// splitOn splits "StatusToUsers" on the first occurrence of sep ("To") into ("Status", "Users").
+func splitOn(s, sep string) (left, right string, ok bool) {
+	re := regexp.MustCompile(sep + `[A-Z]`)
+	loc := re.FindStringIndex(s)
+	if loc == nil {
+		return "", "", false
+	}
+	return s[:loc[0]], s[loc[0]+len(sep):], true
+}
+
+// toSnake converts PascalCase to snake_case: "UserProfiles" → "user_profiles"
+func toSnake(s string) string {
+	var result []rune
+	for i, r := range s {
+		if unicode.IsUpper(r) && i > 0 {
+			result = append(result, '_')
+		}
+		result = append(result, unicode.ToLower(r))
+	}
+	return string(result)
+}
+
+func chooseTemplate(m meta, lang langTemplates) (*template.Template, error) {
+	var src string
+	switch m.Kind {
+	case kindCreate:
+		src = lang.Create
+	case kindDropTable:
+		src = lang.DropTable
+	case kindAddColumn:
+		src = lang.AddColumn
+	case kindChangeColumn:
+		src = lang.ChangeColumn
+	case kindDropColumn:
+		src = lang.DropColumn
+	default:
+		src = lang.Blank
+	}
+	return template.New("migration").Parse(src)
+}

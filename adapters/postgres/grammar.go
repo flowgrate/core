@@ -78,13 +78,10 @@ func columnDef(col manifest.Column) (string, error) {
 		sb.WriteString(" NULL")
 	}
 
-	if col.Default != nil {
-		sb.WriteString(fmt.Sprintf(" DEFAULT %s", formatDefault(col.Default)))
-	}
-
-	if col.Comment != "" {
-		// PostgreSQL comments are set via COMMENT ON COLUMN, not inline.
-		// We skip inline and handle it separately if needed.
+	if col.DefaultExpression != "" {
+		fmt.Fprintf(&sb, " DEFAULT %s", col.DefaultExpression)
+	} else if col.Default != nil {
+		fmt.Fprintf(&sb, " DEFAULT %s", formatDefault(col.Default))
 	}
 
 	return sb.String(), nil
@@ -178,6 +175,8 @@ func mapType(col manifest.Column) (string, error) {
 		return fmt.Sprintf("VARCHAR(%d)", length), nil
 	case "text":
 		return "TEXT", nil
+	case "small_integer":
+		return "SMALLINT", nil
 	case "integer":
 		return "INTEGER", nil
 	case "big_integer":
@@ -185,14 +184,36 @@ func mapType(col manifest.Column) (string, error) {
 			return "BIGSERIAL", nil
 		}
 		return "BIGINT", nil
+	case "decimal":
+		precision := 8
+		scale := 2
+		if col.Precision != nil {
+			precision = *col.Precision
+		}
+		if col.Scale != nil {
+			scale = *col.Scale
+		}
+		return fmt.Sprintf("NUMERIC(%d, %d)", precision, scale), nil
 	case "float":
 		return "REAL", nil
+	case "double":
+		return "DOUBLE PRECISION", nil
 	case "boolean":
 		return "BOOLEAN", nil
 	case "date":
 		return "DATE", nil
+	case "time":
+		return "TIME", nil
 	case "timestamp":
 		return "TIMESTAMP", nil
+	case "uuid":
+		return "UUID", nil
+	case "json":
+		return "JSON", nil
+	case "jsonb":
+		return "JSONB", nil
+	case "binary":
+		return "BYTEA", nil
 	default:
 		return "", fmt.Errorf("unknown column type: %s", col.Type)
 	}

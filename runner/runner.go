@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -20,6 +21,13 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 type Runner struct {
 	conn *pgx.Conn
+}
+
+// AppliedMigration holds a record from schema_migrations.
+type AppliedMigration struct {
+	Migration string
+	Batch     int
+	AppliedAt time.Time
 }
 
 func New(ctx context.Context, dsn string) (*Runner, error) {
@@ -112,4 +120,39 @@ func (r *Runner) Down(ctx context.Context, m manifest.Migration) error {
 	}
 
 	return tx.Commit(ctx)
+}
+
+// ListApplied returns all applied migrations ordered by application order.
+func (r *Runner) ListApplied(ctx context.Context) ([]AppliedMigration, error) {
+	rows, err := r.conn.Query(ctx,
+		"SELECT migration, batch, applied_at FROM schema_migrations ORDER BY id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []AppliedMigration
+	for rows.Next() {
+		var m AppliedMigration
+		if err := rows.Scan(&m.Migration, &m.Batch, &m.AppliedAt); err != nil {
+			return nil, err
+		}
+		result = append(result, m)
+	}
+	return result, rows.Err()
+}
+
+// DropAllTables drops every table in the public schema (CASCADE).
+// Used by the fresh command.
+func (r *Runner) DropAllTables(ctx context.Context) error {
+	_, err := r.conn.Exec(ctx, `
+		DO $$ DECLARE
+			r RECORD;
+		BEGIN
+			FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+				EXECUTE 'DROP TABLE IF EXISTS ' || quote_ident(r.tablename) || ' CASCADE';
+			END LOOP;
+		END $$;
+	`)
+	return err
 }

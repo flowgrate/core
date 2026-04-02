@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -9,6 +10,9 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
+	"text/tabwriter"
+	"time"
 
 	"github.com/flowgrate/core/config"
 	"github.com/flowgrate/core/maker"
@@ -30,15 +34,19 @@ func main() {
 	downConfig := downCmd.String("config", config.DefaultFile, "path to flowgrate.yml")
 	downStep := downCmd.Int("step", 1, "roll back N migrations (default 1)")
 
+	statusCmd := flag.NewFlagSet("status", flag.ExitOnError)
+	statusDB := statusCmd.String("db", "", "PostgreSQL DSN (overrides config)")
+	statusConfig := statusCmd.String("config", config.DefaultFile, "path to flowgrate.yml")
+
+	freshCmd := flag.NewFlagSet("fresh", flag.ExitOnError)
+	freshDB := freshCmd.String("db", "", "PostgreSQL DSN (overrides config)")
+	freshConfig := freshCmd.String("config", config.DefaultFile, "path to flowgrate.yml")
+	freshForce := freshCmd.Bool("force", false, "skip confirmation prompt (required when stdin is piped)")
+
 	if len(os.Args) < 2 {
 		printHelp()
 		os.Exit(0)
 	}
-
-	var direction string
-	var dbFlag string
-	var configFile string
-	var step int
 
 	switch os.Args[1] {
 	case "make":
@@ -56,33 +64,180 @@ func main() {
 			fatal("%v", err)
 		}
 		fmt.Printf("created: %s\n", path)
-		return
+
 	case "up":
 		upCmd.Parse(os.Args[2:])
-		direction, dbFlag, configFile, step = "up", *upDB, *upConfig, *upStep
+		runUp(*upConfig, *upDB, *upStep)
+
 	case "down":
 		downCmd.Parse(os.Args[2:])
-		direction, dbFlag, configFile, step = "down", *downDB, *downConfig, *downStep
+		runDown(*downConfig, *downDB, *downStep)
+
+	case "status":
+		statusCmd.Parse(os.Args[2:])
+		runStatus(*statusConfig, *statusDB)
+
+	case "fresh":
+		freshCmd.Parse(os.Args[2:])
+		runFresh(*freshConfig, *freshDB, *freshForce)
+
 	case "help", "--help", "-h":
 		printHelp()
-		return
+
 	default:
 		fmt.Fprintf(os.Stderr, "error: unknown command: %s\n\n", os.Args[1])
 		printHelp()
 		os.Exit(1)
 	}
+}
 
-	cfg, err := config.Load(configFile)
+func runUp(configFile, dbFlag string, step int) {
+	cfg, dsn := loadConfig(configFile, dbFlag)
+	migrations, err := collectMigrations(cfg.Migrations.Project)
 	if err != nil {
-		fatal("%v", err)
+		fatal("collect migrations: %v", err)
 	}
 
-	dsn := cfg.Database.URL
-	if dbFlag != "" {
-		dsn = dbFlag
+	ctx := context.Background()
+	r := connect(ctx, dsn)
+	defer r.Close(ctx)
+
+	if err := r.Init(ctx); err != nil {
+		fatal("init: %v", err)
 	}
-	if dsn == "" {
-		fatal("no database DSN: set database.url in %s or use --db", configFile)
+
+	batch, err := r.NextBatch(ctx)
+	if err != nil {
+		fatal("get batch: %v", err)
+	}
+
+	applied := 0
+	for _, m := range migrations {
+		if step > 0 && applied >= step {
+			break
+		}
+		isApplied, err := r.IsApplied(ctx, m.Migration)
+		if err != nil {
+			fatal("%v", err)
+		}
+		if isApplied {
+			continue
+		}
+		if err := r.Up(ctx, m, batch); err != nil {
+			fatal("%v", err)
+		}
+		fmt.Printf("applied: %s\n", m.Migration)
+		applied++
+	}
+	if applied == 0 {
+		fmt.Println("nothing to migrate")
+	}
+}
+
+func runDown(configFile, dbFlag string, step int) {
+	cfg, dsn := loadConfig(configFile, dbFlag)
+	migrations, err := collectMigrations(cfg.Migrations.Project)
+	if err != nil {
+		fatal("collect migrations: %v", err)
+	}
+
+	ctx := context.Background()
+	r := connect(ctx, dsn)
+	defer r.Close(ctx)
+
+	if err := r.Init(ctx); err != nil {
+		fatal("init: %v", err)
+	}
+
+	var toRollback []manifest.Migration
+	for i := len(migrations) - 1; i >= 0; i-- {
+		isApplied, err := r.IsApplied(ctx, migrations[i].Migration)
+		if err != nil {
+			fatal("%v", err)
+		}
+		if isApplied {
+			toRollback = append(toRollback, migrations[i])
+		}
+	}
+
+	count := 0
+	for _, m := range toRollback {
+		if count >= step {
+			break
+		}
+		if err := r.Down(ctx, m); err != nil {
+			fatal("%v", err)
+		}
+		fmt.Printf("rolled back: %s\n", m.Migration)
+		count++
+	}
+	if count == 0 {
+		fmt.Println("nothing to roll back")
+	}
+}
+
+func runStatus(configFile, dbFlag string) {
+	cfg, dsn := loadConfig(configFile, dbFlag)
+	migrations, err := collectMigrations(cfg.Migrations.Project)
+	if err != nil {
+		fatal("collect migrations: %v", err)
+	}
+
+	ctx := context.Background()
+	r := connect(ctx, dsn)
+	defer r.Close(ctx)
+
+	if err := r.Init(ctx); err != nil {
+		fatal("init: %v", err)
+	}
+
+	applied, err := r.ListApplied(ctx)
+	if err != nil {
+		fatal("list applied: %v", err)
+	}
+
+	// Build a lookup map: migration name → record
+	appliedMap := make(map[string]runner.AppliedMigration, len(applied))
+	for _, a := range applied {
+		appliedMap[a.Migration] = a
+	}
+
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "Migration\tStatus\tBatch\tApplied At")
+	fmt.Fprintln(w, strings.Repeat("─", 80))
+
+	for _, m := range migrations {
+		if rec, ok := appliedMap[m.Migration]; ok {
+			fmt.Fprintf(w, "%s\t%s\t%d\t%s\n",
+				m.Migration, "Applied", rec.Batch,
+				rec.AppliedAt.Format(time.DateTime))
+		} else {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+				m.Migration, "Pending", "-", "-")
+		}
+	}
+	w.Flush()
+}
+
+func runFresh(configFile, dbFlag string, force bool) {
+	stdinIsPipe := stdinPiped()
+
+	if !force && stdinIsPipe {
+		fatal("stdin is piped; add --force to skip the confirmation prompt")
+	}
+
+	cfg, dsn := loadConfig(configFile, dbFlag)
+
+	if !force {
+		fmt.Printf("WARNING: This will drop ALL tables in the database and re-run all migrations.\n")
+		fmt.Printf("Database: %s\n\n", dsn)
+		fmt.Print(`Type "yes" to continue: `)
+		var answer string
+		fmt.Scanln(&answer)
+		if answer != "yes" {
+			fmt.Println("aborted")
+			return
+		}
 	}
 
 	migrations, err := collectMigrations(cfg.Migrations.Project)
@@ -91,77 +246,63 @@ func main() {
 	}
 
 	ctx := context.Background()
-
-	r, err := runner.New(ctx, dsn)
-	if err != nil {
-		fatal("connect: %v", err)
-	}
+	r := connect(ctx, dsn)
 	defer r.Close(ctx)
+
+	fmt.Println("dropping all tables...")
+	if err := r.DropAllTables(ctx); err != nil {
+		fatal("drop tables: %v", err)
+	}
 
 	if err := r.Init(ctx); err != nil {
 		fatal("init: %v", err)
 	}
 
-	switch direction {
-	case "up":
-		batch, err := r.NextBatch(ctx)
-		if err != nil {
-			fatal("get batch: %v", err)
+	batch := 1
+	for _, m := range migrations {
+		if err := r.Up(ctx, m, batch); err != nil {
+			fatal("%v", err)
 		}
-		applied := 0
-		for _, m := range migrations {
-			if step > 0 && applied >= step {
-				break
-			}
-			isApplied, err := r.IsApplied(ctx, m.Migration)
-			if err != nil {
-				fatal("%v", err)
-			}
-			if isApplied {
-				fmt.Printf("skip: %s\n", m.Migration)
-				continue
-			}
-			if err := r.Up(ctx, m, batch); err != nil {
-				fatal("%v", err)
-			}
-			fmt.Printf("applied: %s\n", m.Migration)
-			applied++
-		}
-
-	case "down":
-		// Collect applied migrations in reverse order
-		var toRollback []manifest.Migration
-		for i := len(migrations) - 1; i >= 0; i-- {
-			isApplied, err := r.IsApplied(ctx, migrations[i].Migration)
-			if err != nil {
-				fatal("%v", err)
-			}
-			if isApplied {
-				toRollback = append(toRollback, migrations[i])
-			}
-		}
-		count := 0
-		for _, m := range toRollback {
-			if count >= step {
-				break
-			}
-			if err := r.Down(ctx, m); err != nil {
-				fatal("%v", err)
-			}
-			fmt.Printf("rolled back: %s\n", m.Migration)
-			count++
-		}
+		fmt.Printf("applied: %s\n", m.Migration)
 	}
+	fmt.Println("done")
+}
+
+// --- Helpers ---
+
+func loadConfig(configFile, dbFlag string) (*config.Config, string) {
+	cfg, err := config.Load(configFile)
+	if err != nil {
+		fatal("%v", err)
+	}
+	dsn := cfg.Database.URL
+	if dbFlag != "" {
+		dsn = dbFlag
+	}
+	if dsn == "" {
+		fatal("no database DSN: set database.url in %s or use --db", configFile)
+	}
+	return cfg, dsn
+}
+
+func connect(ctx context.Context, dsn string) *runner.Runner {
+	r, err := runner.New(ctx, dsn)
+	if err != nil {
+		fatal("connect: %v", err)
+	}
+	return r
+}
+
+func stdinPiped() bool {
+	stat, _ := os.Stdin.Stat()
+	return (stat.Mode() & os.ModeCharDevice) == 0
 }
 
 // collectMigrations reads manifests from stdin (if piped) or calls dotnet run.
 func collectMigrations(project string) ([]manifest.Migration, error) {
 	var src io.Reader
 
-	stat, _ := os.Stdin.Stat()
-	stdinIsPipe := (stat.Mode() & os.ModeCharDevice) == 0
-
-	if stdinIsPipe {
+	if stdinPiped() {
 		src = os.Stdin
 	} else {
 		cmd := exec.Command("dotnet", "run", "--project", project)
@@ -175,7 +316,7 @@ func collectMigrations(project string) ([]manifest.Migration, error) {
 	}
 
 	var migrations []manifest.Migration
-	decoder := json.NewDecoder(src)
+	decoder := json.NewDecoder(bufio.NewReader(src))
 	for decoder.More() {
 		var m manifest.Migration
 		if err := decoder.Decode(&m); err != nil {
@@ -212,6 +353,15 @@ Commands:
     --db=DSN       PostgreSQL DSN (overrides config)
     --config=FILE  Path to config file (default: flowgrate.yml)
 
+  status         Show applied and pending migrations.
+    --db=DSN       PostgreSQL DSN (overrides config)
+    --config=FILE  Path to config file (default: flowgrate.yml)
+
+  fresh          Drop all tables and re-run all migrations from scratch.
+    --force        Skip confirmation prompt (required when stdin is piped)
+    --db=DSN       PostgreSQL DSN (overrides config)
+    --config=FILE  Path to config file (default: flowgrate.yml)
+
   help           Show this help message.
 
 Config (flowgrate.yml):
@@ -228,6 +378,9 @@ Examples:
   flowgrate up --step=3
   flowgrate down
   flowgrate down --step=3
+  flowgrate status
+  flowgrate fresh
+  flowgrate fresh --force
 `)
 }
 

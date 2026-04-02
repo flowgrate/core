@@ -16,15 +16,18 @@ type Operation struct {
 }
 
 type Column struct {
-	Name          string `json:"name"`
-	Type          string `json:"type"`
-	ColumnAction  string `json:"column_action,omitempty"`
-	Length        *int   `json:"length,omitempty"`
-	Nullable      bool   `json:"nullable,omitempty"`
-	Primary       bool   `json:"primary,omitempty"`
-	AutoIncrement bool   `json:"auto_increment,omitempty"`
-	Default       any    `json:"default,omitempty"`
-	Comment       string `json:"comment,omitempty"`
+	Name              string `json:"name"`
+	Type              string `json:"type"`
+	ColumnAction      string `json:"column_action,omitempty"`
+	Length            *int   `json:"length,omitempty"`
+	Precision         *int   `json:"precision,omitempty"`
+	Scale             *int   `json:"scale,omitempty"`
+	Nullable          bool   `json:"nullable,omitempty"`
+	Primary           bool   `json:"primary,omitempty"`
+	AutoIncrement     bool   `json:"auto_increment,omitempty"`
+	Default           any    `json:"default,omitempty"`
+	DefaultExpression string `json:"default_expression,omitempty"`
+	Comment           string `json:"comment,omitempty"`
 }
 
 type Index struct {

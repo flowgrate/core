@@ -21,6 +21,7 @@ type DatabaseConfig struct {
 type MigrationsConfig struct {
 	Project string `yaml:"project"`
 	SDK     string `yaml:"sdk"` // csharp | python (default: csharp)
+	Run     string `yaml:"run"` // optional: full command to invoke the SDK
 }
 
 func (m MigrationsConfig) ResolvedSDK() string {
@@ -28,6 +29,26 @@ func (m MigrationsConfig) ResolvedSDK() string {
 		return "csharp"
 	}
 	return m.SDK
+}
+
+// RunCommand returns the shell command used to invoke the SDK.
+// Priority: explicit run → SDK default → error.
+// The command is always executed via "sh -c" so any shell syntax is supported.
+func (m MigrationsConfig) RunCommand() (string, error) {
+	if m.Run != "" {
+		return m.Run, nil
+	}
+
+	switch m.ResolvedSDK() {
+	case "csharp":
+		return "dotnet run --project " + m.Project, nil
+	case "python":
+		return "python " + m.Project, nil
+	default:
+		return "", fmt.Errorf(
+			"unknown sdk %q and no 'run' command set in flowgrate.yml\n"+
+				"  add: migrations.run: <command>", m.ResolvedSDK())
+	}
 }
 
 func Load(path string) (*Config, error) {

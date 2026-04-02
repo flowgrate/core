@@ -21,6 +21,11 @@ import (
 )
 
 func main() {
+	initCmd := flag.NewFlagSet("init", flag.ExitOnError)
+	initDB := initCmd.String("db", "", "database URL to pre-fill")
+	initSDK := initCmd.String("sdk", "csharp", "sdk to use (csharp | python)")
+	initForce := initCmd.Bool("force", false, "overwrite existing flowgrate.yml")
+
 	makeCmd := flag.NewFlagSet("make", flag.ExitOnError)
 	makeConfig := makeCmd.String("config", config.DefaultFile, "path to flowgrate.yml")
 
@@ -49,6 +54,14 @@ func main() {
 	}
 
 	switch os.Args[1] {
+	case "init":
+		initCmd.Parse(os.Args[2:])
+		path, err := maker.InitConfig(".", *initDB, *initSDK, *initForce)
+		if err != nil {
+			fatal("%v", err)
+		}
+		fmt.Printf("created: %s\n", path)
+
 	case "make":
 		makeCmd.Parse(os.Args[2:])
 		if makeCmd.NArg() == 0 {
@@ -93,7 +106,7 @@ func main() {
 
 func runUp(configFile, dbFlag string, step int) {
 	cfg, dsn := loadConfig(configFile, dbFlag)
-	migrations, err := collectMigrations(cfg.Migrations.Project)
+	migrations, err := collectMigrations(cfg)
 	if err != nil {
 		fatal("collect migrations: %v", err)
 	}
@@ -136,7 +149,7 @@ func runUp(configFile, dbFlag string, step int) {
 
 func runDown(configFile, dbFlag string, step int) {
 	cfg, dsn := loadConfig(configFile, dbFlag)
-	migrations, err := collectMigrations(cfg.Migrations.Project)
+	migrations, err := collectMigrations(cfg)
 	if err != nil {
 		fatal("collect migrations: %v", err)
 	}
@@ -178,7 +191,7 @@ func runDown(configFile, dbFlag string, step int) {
 
 func runStatus(configFile, dbFlag string) {
 	cfg, dsn := loadConfig(configFile, dbFlag)
-	migrations, err := collectMigrations(cfg.Migrations.Project)
+	migrations, err := collectMigrations(cfg)
 	if err != nil {
 		fatal("collect migrations: %v", err)
 	}
@@ -240,7 +253,7 @@ func runFresh(configFile, dbFlag string, force bool) {
 		}
 	}
 
-	migrations, err := collectMigrations(cfg.Migrations.Project)
+	migrations, err := collectMigrations(cfg)
 	if err != nil {
 		fatal("collect migrations: %v", err)
 	}
@@ -298,19 +311,23 @@ func stdinPiped() bool {
 	return (stat.Mode() & os.ModeCharDevice) == 0
 }
 
-// collectMigrations reads manifests from stdin (if piped) or calls dotnet run.
-func collectMigrations(project string) ([]manifest.Migration, error) {
+// collectMigrations reads manifests from stdin (if piped) or invokes the SDK.
+func collectMigrations(cfg *config.Config) ([]manifest.Migration, error) {
 	var src io.Reader
 
 	if stdinPiped() {
 		src = os.Stdin
 	} else {
-		cmd := exec.Command("dotnet", "run", "--project", project)
+		shell, err := cfg.Migrations.RunCommand()
+		if err != nil {
+			return nil, err
+		}
+		cmd := exec.Command("sh", "-c", shell)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 		if err := cmd.Run(); err != nil {
-			return nil, fmt.Errorf("dotnet run: %w\n%s", err, stderr.String())
+			return nil, fmt.Errorf("run %q: %w\n%s", shell, err, stderr.String())
 		}
 		src = &stdout
 	}
@@ -335,6 +352,11 @@ Usage:
   flowgrate <command> [options]
 
 Commands:
+  init           Generate a flowgrate.yml config file in the current directory.
+    --db=DSN       Pre-fill database URL
+    --sdk=LANG     SDK language: csharp | python (default: csharp)
+    --force        Overwrite existing flowgrate.yml
+
   make <Name>    Create a new migration file with a timestamp prefix.
                  The name determines the template:
                    CreateUsersTable       → Schema.Create

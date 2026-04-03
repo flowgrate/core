@@ -81,8 +81,9 @@ func main() {
 		name := makeCmd.Arg(0)
 		path, err := maker.Make(name, cfg.Migrations.Project, cfg.Migrations.ResolvedSDK(),
 			maker.MakeOptions{
-				StubsDir: cfg.Migrations.Stubs,
-				FileExt:  cfg.Migrations.FileExt,
+				StubsDir:  cfg.Migrations.Stubs,
+				FileExt:   cfg.Migrations.FileExt,
+				TableCase: cfg.Migrations.TableCase,
 			})
 		if err != nil {
 			fatal("%v", err)

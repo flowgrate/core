@@ -8,19 +8,20 @@ import (
 )
 
 func TestParse(t *testing.T) {
+	// parse() returns raw PascalCase; naming is applied later in Make().
 	cases := []struct {
 		name    string
 		kind    migrationKind
 		table   string
 		column  string
 	}{
-		{"CreateUsersTable", kindCreate, "users", ""},
-		{"CreateUserProfilesTable", kindCreate, "user_profiles", ""},
-		{"DropPostsTable", kindDropTable, "posts", ""},
-		{"AddStatusToUsers", kindAddColumn, "users", "status"},
-		{"AddProfileImageToUserProfiles", kindAddColumn, "user_profiles", "profile_image"},
-		{"ChangeEmailInUsers", kindChangeColumn, "users", "email"},
-		{"DropAvatarFromUsers", kindDropColumn, "users", "avatar"},
+		{"CreateUsersTable", kindCreate, "Users", ""},
+		{"CreateUserProfilesTable", kindCreate, "UserProfiles", ""},
+		{"DropPostsTable", kindDropTable, "Posts", ""},
+		{"AddStatusToUsers", kindAddColumn, "Users", "Status"},
+		{"AddProfileImageToUserProfiles", kindAddColumn, "UserProfiles", "ProfileImage"},
+		{"ChangeEmailInUsers", kindChangeColumn, "Users", "Email"},
+		{"DropAvatarFromUsers", kindDropColumn, "Users", "Avatar"},
 		{"SomethingRandom", kindBlank, "", ""},
 	}
 
@@ -52,6 +53,40 @@ func TestToSnake(t *testing.T) {
 			t.Errorf("toSnake(%q) = %q, want %q", tc[0], got, tc[1])
 		}
 	}
+}
+
+func TestToCamel(t *testing.T) {
+	cases := [][2]string{
+		{"Users", "users"},
+		{"UserProfiles", "userProfiles"},
+		{"Status", "status"},
+		{"ProfileImage", "profileImage"},
+	}
+	for _, tc := range cases {
+		if got := toCamel(tc[0]); got != tc[1] {
+			t.Errorf("toCamel(%q) = %q, want %q", tc[0], got, tc[1])
+		}
+	}
+}
+
+func TestMake_TableCase(t *testing.T) {
+	dir := t.TempDir()
+
+	// Default: snake_case
+	path, err := Make("CreateUserProfilesTable", dir, "python", MakeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, _ := os.ReadFile(path)
+	assertContains(t, string(content), "user_profiles")
+
+	// Explicit camelCase
+	path, err = Make("CreateUserProfilesTable", dir, "python", MakeOptions{TableCase: "camel"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, _ = os.ReadFile(path)
+	assertContains(t, string(content), "userProfiles")
 }
 
 func TestMake_CreatesFile(t *testing.T) {

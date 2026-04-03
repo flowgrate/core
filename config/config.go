@@ -19,11 +19,12 @@ type DatabaseConfig struct {
 }
 
 type MigrationsConfig struct {
-	Project string `yaml:"project"`
-	SDK     string `yaml:"sdk"`     // csharp | python | any custom value
-	Run     string `yaml:"run"`     // shell command to invoke the SDK (required for custom SDKs)
-	Stubs   string `yaml:"stubs"`   // path to directory with custom .tmpl files (optional)
-	FileExt string `yaml:"file_ext"` // file extension for generated migration files (custom SDKs)
+	Project    string `yaml:"project"`
+	SDK        string `yaml:"sdk"`        // csharp | python | any custom value
+	Run        string `yaml:"run"`        // shell command to invoke the SDK (required for custom SDKs)
+	Stubs      string `yaml:"stubs"`      // path to directory with custom .tmpl files (optional)
+	FileExt    string `yaml:"file_ext"`   // file extension for generated migration files (custom SDKs)
+	TableCase  string `yaml:"table_case"` // snake (default) | camel
 }
 
 func (m MigrationsConfig) ResolvedSDK() string {

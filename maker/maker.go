@@ -13,8 +13,9 @@ import (
 
 // MakeOptions carries optional settings for custom SDK support.
 type MakeOptions struct {
-	StubsDir string // Variant B: directory containing .tmpl files
-	FileExt  string // Variant B: override file extension
+	StubsDir  string // Variant B: directory containing .tmpl files
+	FileExt   string // Variant B: override file extension
+	TableCase string // "snake" (default) | "camel"
 }
 
 type migrationKind int
@@ -58,10 +59,14 @@ func Make(name, projectDir, sdk string, opts MakeOptions) (string, error) {
 		return "", err
 	}
 
+	nameFunc := resolveNameFunc(opts.TableCase)
+
 	m := parse(name)
 	m.ClassName = name
 	m.Version = timestamp
 	m.Namespace = lang.NamespaceFunc(datePrefix)
+	m.Table = nameFunc(m.Table)
+	m.Column = nameFunc(m.Column)
 
 	tmpl, err := chooseTemplate(m, lang)
 	if err != nil {
@@ -142,33 +147,33 @@ func parse(name string) meta {
 	// Create{X}Table
 	if strings.HasPrefix(name, "Create") && strings.HasSuffix(name, "Table") {
 		table := name[len("Create") : len(name)-len("Table")]
-		return meta{Kind: kindCreate, Table: toSnake(table)}
+		return meta{Kind: kindCreate, Table: table}
 	}
 
 	// Drop{X}Table
 	if strings.HasPrefix(name, "Drop") && strings.HasSuffix(name, "Table") {
 		table := name[len("Drop") : len(name)-len("Table")]
-		return meta{Kind: kindDropTable, Table: toSnake(table)}
+		return meta{Kind: kindDropTable, Table: table}
 	}
 
 	// Add{Column}To{Table}
 	if strings.HasPrefix(name, "Add") {
 		if col, table, ok := splitOn(name[len("Add"):], "To"); ok {
-			return meta{Kind: kindAddColumn, Column: toSnake(col), Table: toSnake(table)}
+			return meta{Kind: kindAddColumn, Column: col, Table: table}
 		}
 	}
 
 	// Change{Column}In{Table}
 	if strings.HasPrefix(name, "Change") {
 		if col, table, ok := splitOn(name[len("Change"):], "In"); ok {
-			return meta{Kind: kindChangeColumn, Column: toSnake(col), Table: toSnake(table)}
+			return meta{Kind: kindChangeColumn, Column: col, Table: table}
 		}
 	}
 
 	// Drop{Column}From{Table}
 	if strings.HasPrefix(name, "Drop") {
 		if col, table, ok := splitOn(name[len("Drop"):], "From"); ok {
-			return meta{Kind: kindDropColumn, Column: toSnake(col), Table: toSnake(table)}
+			return meta{Kind: kindDropColumn, Column: col, Table: table}
 		}
 	}
 
@@ -195,6 +200,24 @@ func toSnake(s string) string {
 		result = append(result, unicode.ToLower(r))
 	}
 	return string(result)
+}
+
+// toCamel converts PascalCase to camelCase: "UserProfiles" → "userProfiles"
+func toCamel(s string) string {
+	if s == "" {
+		return s
+	}
+	runes := []rune(s)
+	runes[0] = unicode.ToLower(runes[0])
+	return string(runes)
+}
+
+// resolveNameFunc returns the naming function for the given table_case setting.
+func resolveNameFunc(tableCase string) func(string) string {
+	if tableCase == "camel" {
+		return toCamel
+	}
+	return toSnake // default
 }
 
 func chooseTemplate(m meta, lang langTemplates) (*template.Template, error) {

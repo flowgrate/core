@@ -20,6 +20,17 @@ Grab the latest release from [Releases](https://github.com/flowgrate/core/releas
 # Linux (amd64)
 curl -L https://github.com/flowgrate/core/releases/latest/download/flowgrate-linux-amd64 -o flowgrate
 chmod +x flowgrate
+sudo mv flowgrate /usr/local/bin/
+
+# macOS (Apple Silicon)
+curl -L https://github.com/flowgrate/core/releases/latest/download/flowgrate-darwin-arm64 -o flowgrate
+chmod +x flowgrate
+sudo mv flowgrate /usr/local/bin/
+
+# macOS (Intel)
+curl -L https://github.com/flowgrate/core/releases/latest/download/flowgrate-darwin-amd64 -o flowgrate
+chmod +x flowgrate
+sudo mv flowgrate /usr/local/bin/
 ```
 
 ### Build from source
@@ -32,7 +43,13 @@ go build -o flowgrate .
 
 ## Quick start
 
-**1. Create `flowgrate.yml`:**
+**1. Generate config:**
+
+```bash
+flowgrate init --db=postgres://user:pass@localhost/mydb --sdk=csharp
+```
+
+Or create `flowgrate.yml` manually:
 
 ```yaml
 database:
@@ -40,7 +57,8 @@ database:
 
 migrations:
   project: ./Migrations   # path to your SDK project
-  sdk: csharp             # csharp | python
+  sdk: csharp             # csharp | python | any custom value
+  table_case: snake       # snake (default) | camel
 ```
 
 **2. Generate a migration:**
@@ -59,6 +77,7 @@ flowgrate up
 
 | Command | Description |
 |---------|-------------|
+| `flowgrate init` | Generate a `flowgrate.yml` config file |
 | `flowgrate make <Name>` | Generate a migration file with a timestamp prefix |
 | `flowgrate up` | Apply all pending migrations |
 | `flowgrate down` | Roll back the last migration |
@@ -99,28 +118,64 @@ The name you pass to `make` determines the generated template:
 | `DropAvatarFromUsers` | `Schema.Table` + `DropColumn` |
 | `DropPostsTable` | `Schema.DropIfExists` |
 
-## Docker usage
+Table and column names in generated files follow `table_case` from config:
+- `snake` (default): `CreateUserProfilesTable` → `user_profiles`
+- `camel`: `CreateUserProfilesTable` → `userProfiles`
 
-```bash
-# Run SDK in Docker, CLI on host
-docker compose exec sdk dotnet run --project /migrations | ./flowgrate up
+## Config reference
+
+```yaml
+database:
+  url: postgres://user:pass@localhost/mydb  # or mysql:// | sqlite:///
+
+migrations:
+  project: ./Migrations   # where migration files live
+  sdk: csharp             # csharp | python | any custom value
+  run: dotnet run --project ./Migrations  # explicit invoke command (optional for built-in SDKs)
+  table_case: snake       # snake (default) | camel
+
+  # Custom / third-party SDK options:
+  stubs: ./my-stubs       # directory with .tmpl files for custom make templates
+  file_ext: .rb           # file extension for generated migration files
 ```
+
+If `run` is not set, the CLI uses built-in defaults for `csharp` and `python`. For any other SDK value, `run` is required.
+
+## Custom SDKs
+
+Flowgrate supports any SDK that writes JSON manifests to stdout. See the [manifest spec](https://github.com/flowgrate/spec).
+
+```yaml
+migrations:
+  sdk: ruby
+  run: bundle exec ruby migrations/runner.rb
+  table_case: snake
+```
+
+When `sdk` is set to an unknown value, `flowgrate make` generates a `.migration` JSON skeleton showing the expected output format. To use your own templates instead, point `stubs` at a directory with `.tmpl` files:
+
+```
+my-stubs/
+  create.tmpl
+  drop_table.tmpl
+  add_column.tmpl
+  change_column.tmpl
+  drop_column.tmpl
+  blank.tmpl
+```
+
+Templates use Go's `text/template` syntax with variables: `{{.ClassName}}`, `{{.Table}}`, `{{.Column}}`, `{{.Version}}`.
 
 ## squash
 
-`flowgrate squash` dumps the current database schema (DDL + applied migration history) into a single SQL file. On the next `flowgrate up` against an **empty** database, the dump is loaded automatically instead of replaying all migrations from scratch — useful for onboarding new developers or setting up CI environments.
+`flowgrate squash` dumps the current database schema (DDL + applied migration history) into a single SQL file. On the next `flowgrate up` against an **empty** database, the dump is loaded automatically — useful for onboarding new developers or CI environments.
 
 ```bash
-# Dump schema
-flowgrate squash
-
-# Dump and delete all migration files
-flowgrate squash --prune
+flowgrate squash           # dump to schema/{driver}-schema.sql
+flowgrate squash --prune   # dump and delete all migration files
 ```
 
-The dump is stored as `schema/{driver}-schema.sql` next to `flowgrate.yml` and should be committed to version control.
-
-Requires the native CLI client to be installed on the host:
+The dump file should be committed to version control. Requires the native CLI client on the host:
 
 | Database   | Dump tool      | Load tool  |
 |------------|----------------|------------|
@@ -133,19 +188,26 @@ Requires the native CLI client to be installed on the host:
 
 | Database   | Migrations | squash |
 |------------|------------|--------|
-| PostgreSQL | ✅ v1      | ✅ v1  |
-| MySQL      | planned    | ✅ v1  |
-| MariaDB    | planned    | ✅ v1  |
-| SQLite     | planned    | ✅ v1  |
+| PostgreSQL | ✅         | ✅     |
+| MySQL      | ✅         | ✅     |
+| MariaDB    | ✅         | ✅     |
+| SQLite     | ✅         | ✅     |
 
 ## Language SDKs
 
 | Language | Repository | Status |
 |----------|------------|--------|
-| C#       | [flowgrate/dotnet](https://github.com/flowgrate/dotnet) | ✅ v1 |
-| Python   | [flowgrate/python](https://github.com/flowgrate/python) | ✅ v1 |
+| C#       | [flowgrate/dotnet](https://github.com/flowgrate/dotnet) | ✅ |
+| Python   | [flowgrate/python](https://github.com/flowgrate/python) | ✅ |
 
 Want to build an SDK for another language? See the [manifest spec](https://github.com/flowgrate/spec).
+
+## Docker usage
+
+```bash
+# Run SDK in Docker, CLI on host
+docker compose exec sdk dotnet run --project /migrations | ./flowgrate up
+```
 
 ## schema_migrations table
 

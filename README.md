@@ -64,13 +64,14 @@ flowgrate up
 | `flowgrate down` | Roll back the last migration |
 | `flowgrate status` | Show applied and pending migrations |
 | `flowgrate fresh` | Drop all tables and re-run all migrations |
+| `flowgrate squash` | Dump current schema to `schema/{driver}-schema.sql` |
 | `flowgrate help` | Show help |
 
 ### Options
 
 ```
-up / down / status / fresh:
-  --db=DSN         PostgreSQL DSN (overrides config)
+up / down / status / fresh / squash:
+  --db=DSN         Database DSN (overrides config)
   --config=FILE    Path to config file (default: flowgrate.yml)
 
 up:
@@ -81,6 +82,9 @@ down:
 
 fresh:
   --force          Skip confirmation prompt
+
+squash:
+  --prune          Delete all migration files after dumping
 ```
 
 ## Migration naming
@@ -102,20 +106,44 @@ The name you pass to `make` determines the generated template:
 docker compose exec sdk dotnet run --project /migrations | ./flowgrate up
 ```
 
+## squash
+
+`flowgrate squash` dumps the current database schema (DDL + applied migration history) into a single SQL file. On the next `flowgrate up` against an **empty** database, the dump is loaded automatically instead of replaying all migrations from scratch — useful for onboarding new developers or setting up CI environments.
+
+```bash
+# Dump schema
+flowgrate squash
+
+# Dump and delete all migration files
+flowgrate squash --prune
+```
+
+The dump is stored as `schema/{driver}-schema.sql` next to `flowgrate.yml` and should be committed to version control.
+
+Requires the native CLI client to be installed on the host:
+
+| Database   | Dump tool      | Load tool  |
+|------------|----------------|------------|
+| PostgreSQL | `pg_dump`      | `psql`     |
+| MySQL      | `mysqldump`    | `mysql`    |
+| MariaDB    | `mariadb-dump` | `mariadb`  |
+| SQLite     | `sqlite3`      | `sqlite3`  |
+
 ## Supported databases
 
-| Database   | Status |
-|------------|--------|
-| PostgreSQL | ✅ v1  |
-| MySQL      | planned |
-| SQLite     | planned |
+| Database   | Migrations | squash |
+|------------|------------|--------|
+| PostgreSQL | ✅ v1      | ✅ v1  |
+| MySQL      | planned    | ✅ v1  |
+| MariaDB    | planned    | ✅ v1  |
+| SQLite     | planned    | ✅ v1  |
 
 ## Language SDKs
 
 | Language | Repository | Status |
 |----------|------------|--------|
 | C#       | [flowgrate/dotnet](https://github.com/flowgrate/dotnet) | ✅ v1 |
-| Python   | [flowgrate/python](https://github.com/flowgrate/python) | planned |
+| Python   | [flowgrate/python](https://github.com/flowgrate/python) | ✅ v1 |
 
 Want to build an SDK for another language? See the [manifest spec](https://github.com/flowgrate/spec).
 

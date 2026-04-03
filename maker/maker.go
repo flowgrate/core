@@ -212,12 +212,20 @@ func toCamel(s string) string {
 	return string(runes)
 }
 
+// toPascal keeps PascalCase as-is: "UserProfiles" → "UserProfiles"
+// Preferred in C# and some other ecosystems where tables are named in PascalCase.
+func toPascal(s string) string { return s }
+
 // resolveNameFunc returns the naming function for the given table_case setting.
 func resolveNameFunc(tableCase string) func(string) string {
-	if tableCase == "camel" {
+	switch tableCase {
+	case "camel":
 		return toCamel
+	case "pascal":
+		return toPascal
+	default:
+		return toSnake
 	}
-	return toSnake // default
 }
 
 func chooseTemplate(m meta, lang langTemplates) (*template.Template, error) {

@@ -69,6 +69,19 @@ func TestToCamel(t *testing.T) {
 	}
 }
 
+func TestToPascal(t *testing.T) {
+	cases := [][2]string{
+		{"Users", "Users"},
+		{"UserProfiles", "UserProfiles"},
+		{"Status", "Status"},
+	}
+	for _, tc := range cases {
+		if got := toPascal(tc[0]); got != tc[1] {
+			t.Errorf("toPascal(%q) = %q, want %q", tc[0], got, tc[1])
+		}
+	}
+}
+
 func TestMake_TableCase(t *testing.T) {
 	dir := t.TempDir()
 
@@ -87,6 +100,14 @@ func TestMake_TableCase(t *testing.T) {
 	}
 	content, _ = os.ReadFile(path)
 	assertContains(t, string(content), "userProfiles")
+
+	// PascalCase
+	path, err = Make("CreateUserProfilesTable", dir, "python", MakeOptions{TableCase: "pascal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, _ = os.ReadFile(path)
+	assertContains(t, string(content), "UserProfiles")
 }
 
 func TestMake_CreatesFile(t *testing.T) {

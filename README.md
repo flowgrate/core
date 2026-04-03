@@ -58,7 +58,7 @@ database:
 migrations:
   project: ./Migrations   # path to your SDK project
   sdk: csharp             # csharp | python | any custom value
-  table_case: snake       # snake (default) | camel
+  table_case: snake       # snake (default) | camel | pascal
 ```
 
 **2. Generate a migration:**
@@ -119,8 +119,12 @@ The name you pass to `make` determines the generated template:
 | `DropPostsTable` | `Schema.DropIfExists` |
 
 Table and column names in generated files follow `table_case` from config:
-- `snake` (default): `CreateUserProfilesTable` → `user_profiles`
-- `camel`: `CreateUserProfilesTable` → `userProfiles`
+
+| Value | Example | Common in |
+|-------|---------|-----------|
+| `snake` (default) | `user_profiles` | Python, Ruby, Go |
+| `camel` | `userProfiles` | JavaScript, TypeScript |
+| `pascal` | `UserProfiles` | C#, Java |
 
 ## Config reference
 
@@ -132,7 +136,7 @@ migrations:
   project: ./Migrations   # where migration files live
   sdk: csharp             # csharp | python | any custom value
   run: dotnet run --project ./Migrations  # explicit invoke command (optional for built-in SDKs)
-  table_case: snake       # snake (default) | camel
+  table_case: snake       # snake (default) | camel | pascal
 
   # Custom / third-party SDK options:
   stubs: ./my-stubs       # directory with .tmpl files for custom make templates

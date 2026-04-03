@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -27,144 +26,54 @@ func New(dsn string) (SchemaState, error) {
 	switch u.Scheme {
 	case "postgres", "postgresql":
 		return &postgresState{u: u}, nil
+	case "mysql":
+		return newMySQLState(u, false), nil
+	case "mariadb":
+		return newMySQLState(u, true), nil
+	case "sqlite", "sqlite3":
+		return &sqliteState{dbPath: sqliteDBPath(u)}, nil
 	default:
-		return nil, fmt.Errorf("squash: unsupported driver %q (supported: postgres)", u.Scheme)
+		return nil, fmt.Errorf("squash: unsupported driver %q (supported: postgres, mysql, mariadb, sqlite)", u.Scheme)
 	}
 }
 
-// SchemaFilePath returns the canonical path for the schema dump file,
-// stored next to the config file: schema/{driver}-schema.sql
+// SchemaFilePath returns the canonical path for the schema dump file:
+// schema/{driver}-schema.sql, stored next to the config file.
 func SchemaFilePath(configDir, driver string) string {
 	return filepath.Join(configDir, "schema", driver+"-schema.sql")
 }
 
-// --- PostgreSQL ---
-
-type postgresState struct {
-	u *url.URL
+// ensureDir creates the parent directory of path if it doesn't exist.
+func ensureDir(path string) error {
+	return os.MkdirAll(filepath.Dir(path), 0o755)
 }
 
-func (s *postgresState) Driver() string { return "postgres" }
-
-func (s *postgresState) Dump(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-
-	env := s.env()
-
-	// 1. Dump DDL (schema only, no data, no owner/ACL noise)
-	schemaArgs := append(s.baseArgs(),
-		"--schema-only",
-		"--no-owner",
-		"--no-acl",
-	)
-	out, err := s.run(env, "pg_dump", schemaArgs...)
-	if err != nil {
-		return fmt.Errorf("pg_dump schema: %w", err)
-	}
-	if err := os.WriteFile(path, out, 0o644); err != nil {
-		return err
-	}
-
-	// 2. Append data-only dump of schema_migrations so fresh installs
-	//    know which migrations have already been applied.
-	dataArgs := append(s.baseArgs(),
-		"--data-only",
-		"--table="+migrationTable,
-	)
-	migData, err := s.run(env, "pg_dump", dataArgs...)
-	if err != nil {
-		// If the table doesn't exist yet (nothing applied), skip silently.
-		if strings.Contains(err.Error(), "no matching tables") ||
-			strings.Contains(err.Error(), migrationTable) {
-			return nil
-		}
-		return fmt.Errorf("pg_dump migrations data: %w", err)
-	}
+// appendToFile appends data to the file at path.
+func appendToFile(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	_, err = f.Write(migData)
+	_, err = f.Write(data)
 	return err
 }
 
-func (s *postgresState) Load(path string) error {
-	args := []string{
-		"--file=" + path,
-		"--host=" + s.host(),
-		"--port=" + s.port(),
-		"--username=" + s.user(),
-		"--dbname=" + s.dbname(),
-		"--no-password",
+// isMissingTableError returns true when pg_dump / mysqldump reports that the
+// migration table doesn't exist yet (nothing has been applied).
+func isMissingTableError(errMsg string) bool {
+	msg := strings.ToLower(errMsg)
+	return strings.Contains(msg, "no matching tables") ||
+		strings.Contains(msg, migrationTable) ||
+		strings.Contains(msg, "doesn't exist") ||
+		strings.Contains(msg, "does not exist")
+}
+
+func sqliteDBPath(u *url.URL) string {
+	// sqlite:///abs/path  → /abs/path
+	// sqlite://./rel      → ./rel
+	if u.Host == "" {
+		return u.Path
 	}
-	cmd := exec.Command("psql", args...)
-	cmd.Env = append(os.Environ(), "PGPASSWORD="+s.password())
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func (s *postgresState) baseArgs() []string {
-	return []string{
-		"--host=" + s.host(),
-		"--port=" + s.port(),
-		"--username=" + s.user(),
-		"--dbname=" + s.dbname(),
-		"--no-password",
-	}
-}
-
-func (s *postgresState) env() []string {
-	return append(os.Environ(), "PGPASSWORD="+s.password())
-}
-
-func (s *postgresState) run(env []string, name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
-	cmd.Env = env
-	out, err := cmd.Output()
-	if err != nil {
-		if ee, ok := err.(*exec.ExitError); ok {
-			return nil, fmt.Errorf("%s: %s", name, string(ee.Stderr))
-		}
-		return nil, fmt.Errorf("%s: %w", name, err)
-	}
-	return out, nil
-}
-
-func (s *postgresState) host() string {
-	h := s.u.Hostname()
-	if h == "" {
-		return "localhost"
-	}
-	return h
-}
-
-func (s *postgresState) port() string {
-	p := s.u.Port()
-	if p == "" {
-		return "5432"
-	}
-	return p
-}
-
-func (s *postgresState) user() string {
-	if s.u.User != nil {
-		return s.u.User.Username()
-	}
-	return ""
-}
-
-func (s *postgresState) password() string {
-	if s.u.User != nil {
-		p, _ := s.u.User.Password()
-		return p
-	}
-	return ""
-}
-
-func (s *postgresState) dbname() string {
-	return strings.TrimPrefix(s.u.Path, "/")
+	return u.Host + u.Path
 }

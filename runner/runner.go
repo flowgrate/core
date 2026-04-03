@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -140,6 +141,23 @@ func (r *Runner) ListApplied(ctx context.Context) ([]AppliedMigration, error) {
 		result = append(result, m)
 	}
 	return result, rows.Err()
+}
+
+// IsFresh returns true if schema_migrations does not exist or has no rows.
+// Used to detect whether to load a squash dump on `flowgrate up`.
+func (r *Runner) IsFresh(ctx context.Context) (bool, error) {
+	var count int
+	err := r.conn.QueryRow(ctx, `
+		SELECT COUNT(*) FROM schema_migrations
+	`).Scan(&count)
+	if err != nil {
+		// Table doesn't exist yet — definitely fresh.
+		if strings.Contains(err.Error(), "does not exist") {
+			return true, nil
+		}
+		return false, err
+	}
+	return count == 0, nil
 }
 
 // DropAllTables drops every table in the public schema (CASCADE).

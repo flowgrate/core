@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -18,6 +19,7 @@ import (
 	"github.com/flowgrate/core/maker"
 	"github.com/flowgrate/core/manifest"
 	"github.com/flowgrate/core/runner"
+	"github.com/flowgrate/core/squash"
 )
 
 func main() {
@@ -47,6 +49,11 @@ func main() {
 	freshDB := freshCmd.String("db", "", "PostgreSQL DSN (overrides config)")
 	freshConfig := freshCmd.String("config", config.DefaultFile, "path to flowgrate.yml")
 	freshForce := freshCmd.Bool("force", false, "skip confirmation prompt (required when stdin is piped)")
+
+	squashCmd := flag.NewFlagSet("squash", flag.ExitOnError)
+	squashDB := squashCmd.String("db", "", "PostgreSQL DSN (overrides config)")
+	squashConfig := squashCmd.String("config", config.DefaultFile, "path to flowgrate.yml")
+	squashPrune := squashCmd.Bool("prune", false, "delete all migration files after dumping")
 
 	if len(os.Args) < 2 {
 		printHelp()
@@ -94,6 +101,10 @@ func main() {
 		freshCmd.Parse(os.Args[2:])
 		runFresh(*freshConfig, *freshDB, *freshForce)
 
+	case "squash":
+		squashCmd.Parse(os.Args[2:])
+		runSquash(*squashConfig, *squashDB, *squashPrune)
+
 	case "help", "--help", "-h":
 		printHelp()
 
@@ -114,6 +125,25 @@ func runUp(configFile, dbFlag string, step int) {
 	ctx := context.Background()
 	r := connect(ctx, dsn)
 	defer r.Close(ctx)
+
+	// If a schema dump exists and the DB is fresh, load it instead of
+	// running all migrations from scratch. This is the squash fast-path.
+	state, stateErr := squash.New(dsn)
+	if stateErr == nil {
+		schemaFile := squash.SchemaFilePath(filepath.Dir(configFile), state.Driver())
+		if _, err := os.Stat(schemaFile); err == nil {
+			fresh, err := r.IsFresh(ctx)
+			if err != nil {
+				fatal("check db state: %v", err)
+			}
+			if fresh {
+				fmt.Printf("loading schema dump: %s\n", schemaFile)
+				if err := state.Load(schemaFile); err != nil {
+					fatal("load schema dump: %v", err)
+				}
+			}
+		}
+	}
 
 	if err := r.Init(ctx); err != nil {
 		fatal("init: %v", err)
@@ -281,6 +311,46 @@ func runFresh(configFile, dbFlag string, force bool) {
 	fmt.Println("done")
 }
 
+func runSquash(configFile, dbFlag string, prune bool) {
+	cfg, dsn := loadConfig(configFile, dbFlag)
+
+	state, err := squash.New(dsn)
+	if err != nil {
+		fatal("%v", err)
+	}
+
+	schemaFile := squash.SchemaFilePath(filepath.Dir(configFile), state.Driver())
+
+	fmt.Printf("dumping schema to %s...\n", schemaFile)
+	if err := state.Dump(schemaFile); err != nil {
+		fatal("dump: %v", err)
+	}
+	fmt.Println("schema dumped successfully")
+
+	if prune {
+		dir := cfg.Migrations.Project
+		if dir == "" {
+			fatal("migrations.project not set in config; cannot prune")
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			fatal("read migrations dir: %v", err)
+		}
+		pruned := 0
+		for _, e := range entries {
+			if e.IsDir() {
+				continue
+			}
+			path := filepath.Join(dir, e.Name())
+			if err := os.Remove(path); err != nil {
+				fatal("remove %s: %v", path, err)
+			}
+			pruned++
+		}
+		fmt.Printf("pruned %d migration file(s)\n", pruned)
+	}
+}
+
 // --- Helpers ---
 
 func loadConfig(configFile, dbFlag string) (*config.Config, string) {
@@ -381,6 +451,13 @@ Commands:
 
   fresh          Drop all tables and re-run all migrations from scratch.
     --force        Skip confirmation prompt (required when stdin is piped)
+    --db=DSN       PostgreSQL DSN (overrides config)
+    --config=FILE  Path to config file (default: flowgrate.yml)
+
+  squash         Dump current schema to schema/{driver}-schema.sql.
+                 On next "flowgrate up" against an empty database, the dump
+                 is loaded instead of replaying all migrations from scratch.
+    --prune        Delete all migration files after dumping
     --db=DSN       PostgreSQL DSN (overrides config)
     --config=FILE  Path to config file (default: flowgrate.yml)
 

@@ -2,6 +2,7 @@ package maker
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -56,7 +57,7 @@ func TestToSnake(t *testing.T) {
 func TestMake_CreatesFile(t *testing.T) {
 	dir := t.TempDir()
 
-	path, err := Make("CreateUsersTable", dir, "csharp")
+	path, err := Make("CreateUsersTable", dir, "csharp", MakeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +77,7 @@ func TestMake_CreatesFile(t *testing.T) {
 
 func TestMake_AddColumn(t *testing.T) {
 	dir := t.TempDir()
-	path, err := Make("AddStatusToUsers", dir, "csharp")
+	path, err := Make("AddStatusToUsers", dir, "csharp", MakeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +89,7 @@ func TestMake_AddColumn(t *testing.T) {
 
 func TestMake_TimestampInFilename(t *testing.T) {
 	dir := t.TempDir()
-	path, err := Make("CreateUsersTable", dir, "csharp")
+	path, err := Make("CreateUsersTable", dir, "csharp", MakeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +105,7 @@ func TestMake_TimestampInFilename(t *testing.T) {
 
 func TestMake_PythonTemplate(t *testing.T) {
 	dir := t.TempDir()
-	path, err := Make("CreateUsersTable", dir, "python")
+	path, err := Make("CreateUsersTable", dir, "python", MakeOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,11 +120,40 @@ func TestMake_PythonTemplate(t *testing.T) {
 	}
 }
 
-func TestMake_UnknownSDK(t *testing.T) {
-	_, err := Make("CreateUsersTable", t.TempDir(), "ruby")
-	if err == nil {
-		t.Error("expected error for unknown sdk")
+func TestMake_CustomSDK_StubA(t *testing.T) {
+	dir := t.TempDir()
+	path, err := Make("CreateUsersTable", dir, "ruby", MakeOptions{})
+	if err != nil {
+		t.Fatalf("unexpected error for custom sdk: %v", err)
 	}
+	// Variant A: generates a .migration JSON skeleton
+	if !strings.HasSuffix(path, ".migration") {
+		t.Errorf("expected .migration extension, got %s", path)
+	}
+	content, _ := os.ReadFile(path)
+	assertContains(t, string(content), `"action": "create_table"`)
+}
+
+func TestMake_CustomSDK_StubB(t *testing.T) {
+	stubsDir := t.TempDir()
+	// Write a custom create.tmpl
+	os.WriteFile(filepath.Join(stubsDir, "create.tmpl"),
+		[]byte("# {{.ClassName}} — create {{.Table}}\n"), 0o644)
+
+	dir := t.TempDir()
+	path, err := Make("CreateUsersTable", dir, "ruby", MakeOptions{
+		StubsDir: stubsDir,
+		FileExt:  ".rb",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.HasSuffix(path, ".rb") {
+		t.Errorf("expected .rb extension, got %s", path)
+	}
+	content, _ := os.ReadFile(path)
+	assertContains(t, string(content), "CreateUsersTable")
+	assertContains(t, string(content), "users")
 }
 
 func assertContains(t *testing.T, s, sub string) {

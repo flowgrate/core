@@ -79,7 +79,11 @@ func main() {
 			fatal("%v", err)
 		}
 		name := makeCmd.Arg(0)
-		path, err := maker.Make(name, cfg.Migrations.Project, cfg.Migrations.ResolvedSDK())
+		path, err := maker.Make(name, cfg.Migrations.Project, cfg.Migrations.ResolvedSDK(),
+			maker.MakeOptions{
+				StubsDir: cfg.Migrations.Stubs,
+				FileExt:  cfg.Migrations.FileExt,
+			})
 		if err != nil {
 			fatal("%v", err)
 		}
@@ -434,6 +438,8 @@ Commands:
                    ChangeEmailInUsers     → Schema.Table + ChangeColumn
                    DropAvatarFromUsers    → Schema.Table + DropColumn
                    DropPostsTable         → Schema.DropIfExists
+                 For custom/third-party SDKs a JSON skeleton (.migration) is
+                 generated, or templates from migrations.stubs dir are used.
 
   up             Apply all pending migrations.
     --step=N       Apply only N migrations (default: all)

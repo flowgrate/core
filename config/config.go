@@ -20,8 +20,10 @@ type DatabaseConfig struct {
 
 type MigrationsConfig struct {
 	Project string `yaml:"project"`
-	SDK     string `yaml:"sdk"` // csharp | python (default: csharp)
-	Run     string `yaml:"run"` // optional: full command to invoke the SDK
+	SDK     string `yaml:"sdk"`     // csharp | python | any custom value
+	Run     string `yaml:"run"`     // shell command to invoke the SDK (required for custom SDKs)
+	Stubs   string `yaml:"stubs"`   // path to directory with custom .tmpl files (optional)
+	FileExt string `yaml:"file_ext"` // file extension for generated migration files (custom SDKs)
 }
 
 func (m MigrationsConfig) ResolvedSDK() string {
@@ -46,8 +48,13 @@ func (m MigrationsConfig) RunCommand() (string, error) {
 		return "python " + m.Project, nil
 	default:
 		return "", fmt.Errorf(
-			"unknown sdk %q and no 'run' command set in flowgrate.yml\n"+
-				"  add: migrations.run: <command>", m.ResolvedSDK())
+			"sdk %q requires migrations.run to be set in flowgrate.yml\n"+
+				"  example:\n"+
+				"    migrations:\n"+
+				"      sdk: %s\n"+
+				"      run: <command that prints JSON to stdout>\n"+
+				"  spec: https://github.com/flowgrate/spec",
+			m.ResolvedSDK(), m.ResolvedSDK())
 	}
 }
 

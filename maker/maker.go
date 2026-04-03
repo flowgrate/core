@@ -11,6 +11,12 @@ import (
 	"unicode"
 )
 
+// MakeOptions carries optional settings for custom SDK support.
+type MakeOptions struct {
+	StubsDir string // Variant B: directory containing .tmpl files
+	FileExt  string // Variant B: override file extension
+}
+
 type migrationKind int
 
 const (
@@ -42,12 +48,12 @@ type langTemplates struct {
 	NamespaceFunc func(datePrefix string) string
 }
 
-func Make(name, projectDir, sdk string) (string, error) {
+func Make(name, projectDir, sdk string, opts MakeOptions) (string, error) {
 	now := time.Now()
 	timestamp := now.Format("20060102_150405")
 	datePrefix := now.Format("20060102")
 
-	lang, err := resolveLang(sdk)
+	lang, err := resolveLang(sdk, opts)
 	if err != nil {
 		return "", err
 	}
@@ -78,15 +84,58 @@ func Make(name, projectDir, sdk string) (string, error) {
 	return path, nil
 }
 
-func resolveLang(sdk string) (langTemplates, error) {
+func resolveLang(sdk string, opts MakeOptions) (langTemplates, error) {
 	switch sdk {
 	case "csharp", "":
 		return csharpTemplates, nil
 	case "python":
 		return pythonTemplates, nil
 	default:
-		return langTemplates{}, fmt.Errorf("unknown sdk: %s (supported: csharp, python)", sdk)
+		// Variant B: load templates from a user-supplied stubs directory.
+		if opts.StubsDir != "" {
+			return loadStubsFromDir(opts.StubsDir, opts.FileExt)
+		}
+		// Variant A: generate a JSON manifest skeleton as a .migration file.
+		lang := stubTemplates
+		if opts.FileExt != "" {
+			lang.FileExt = opts.FileExt
+		}
+		return lang, nil
 	}
+}
+
+// loadStubsFromDir loads langTemplates from a directory of named .tmpl files.
+// Expected files: create.tmpl, drop_table.tmpl, add_column.tmpl,
+// change_column.tmpl, drop_column.tmpl, blank.tmpl
+// All files are optional; missing ones fall back to stubTemplates.
+func loadStubsFromDir(dir, fileExt string) (langTemplates, error) {
+	lang := stubTemplates // start from stub defaults
+	if fileExt != "" {
+		lang.FileExt = fileExt
+	}
+
+	names := map[string]*string{
+		"create.tmpl":        &lang.Create,
+		"drop_table.tmpl":    &lang.DropTable,
+		"add_column.tmpl":    &lang.AddColumn,
+		"change_column.tmpl": &lang.ChangeColumn,
+		"drop_column.tmpl":   &lang.DropColumn,
+		"blank.tmpl":         &lang.Blank,
+	}
+
+	for filename, dst := range names {
+		path := filepath.Join(dir, filename)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue // missing template → use stub default
+			}
+			return langTemplates{}, fmt.Errorf("read stub %s: %w", path, err)
+		}
+		*dst = string(data)
+	}
+
+	return lang, nil
 }
 
 func parse(name string) meta {
